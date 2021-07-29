@@ -1,0 +1,209 @@
+import Mesh
+import Part
+from FreeCAD import Base
+import sys
+
+import math
+import random
+
+# Lightbox creator for Lights in Names
+# Rob Miles 2021
+
+# Creates a single lightbox that contains the given text
+# Must have a files folder that contains pre-built letter designs
+# This is included with the distribution
+
+# Must contain the absolute path to the folder that contains the designs
+
+filePrefix = "C:/Users/rsmil/source/repos/GitHub/lights-in-names/box designer/"
+
+# Put text here. Use line feed characters to separate lines
+# Upper case letters only please
+#
+text="ROB"
+
+NUT_AND_BOLT = 1
+BOLT_ONLY = 2
+
+def addPillar(tray,x,y,baseDepth, pillarType=BOLT_ONLY,pillarRadius=3.5,pillarHeight=4,holeRadius=1.4,holeCounterSinkDepth=1.0,holeCounterSinkRadius=3.0):
+    holeX = x
+    holeY = y
+    pillarShape = Part.makeCylinder(pillarRadius, pillarHeight+baseDepth, Base.Vector(holeX,holeY,0))
+    tray = tray.fuse(pillarShape)
+    if pillarType == NUT_AND_BOLT:
+        holeShape = Part.makeCylinder(holeRadius, pillarHeight + baseDepth, Base.Vector(holeX,holeY,0))
+        tray = tray.cut(holeShape)
+        insetShape = Part.makeCylinder(holeCounterSinkRadius, holeCounterSinkDepth, Base.Vector(holeX,holeY,0))
+        tray = tray.cut(insetShape)
+    if pillarType == BOLT_ONLY:
+        holeShape = Part.makeCylinder(holeRadius, pillarHeight, Base.Vector(holeX,holeY,baseDepth))
+        tray = tray.cut(holeShape)
+    return tray
+
+def addPost(tray,x,y,baseDepth,postWidth=5,postDepth=5,postHeight=4):
+    px = x-postWidth/2.0
+    py = y-postDepth/2.0
+    postShape = Part.makeBox(postWidth, postDepth, postHeight+baseDepth, Base.Vector(px,py,0))
+    tray = tray.fuse(postShape)
+    return tray
+
+def getShape(fileName):
+    mesh = Mesh.read(fileName)
+    shape = Part.Shape()
+    shape.makeShapeFromMesh(mesh.Topology,0.05) # the second arg is the tolerance for sewing
+    solid = Part.makeSolid(shape)
+    return solid
+
+def makeLightElement(text, filePrefix, fileFolder, spacing):
+    xpos=0
+    ypos=0
+    width=0
+    height=0
+    diffuserHeight=0.5
+    result = None 
+    for ch in text:
+        if ch == "\n":
+            fileName = filePrefix + fileFolder + "SP.stl"
+            space_solid = getShape(fileName)
+            bounding = space_solid.BoundBox
+            height = bounding.YMax - bounding.YMin
+            xpos=0
+            ypos=ypos + height + spacing
+            continue     
+        if ch == " ": ch = "SP"
+        fileName = filePrefix + fileFolder +ch+".stl"
+        solid = getShape(fileName)
+        bounding = solid.BoundBox
+        width = bounding.XMax - bounding.XMin
+        height = bounding.YMax - bounding.YMin
+        print ('Processing:',fileFolder, ch)
+        if result == None:
+            # Put the left edge of the first letter at 0
+            # now set the position for the next block
+            xpos = width + spacing 
+            # now create initial item
+            result = solid
+        else:
+            # Adding the letter to the end of the row
+            solid.translate(Base.Vector(xpos,ypos,0))
+            result = result.fuse(solid)
+            xpos = xpos + width + spacing
+    part_boundbox = result.BoundBox
+    result.translate(Base.Vector(-part_boundbox.XMin,-part_boundbox.YMin,-part_boundbox.ZMin))
+    return result
+
+def makeLightBox(text, filePrefix):
+    boxes = makeLightElement(text, filePrefix, u"files/lightbox_", 0)
+    Part.show(boxes)
+    filters = makeLightElement(text, filePrefix, u"files/lightletter_", 5.0)
+    filters.translate(Base.Vector(0,50,0))
+    Part.show(filters)
+#
+    boxBounds = boxes.BoundBox
+    width = boxBounds.XMax - boxBounds.XMin 
+    depth = boxBounds.YMax - boxBounds.YMin
+    print ('Width:', width)
+    print ('Depth:', depth)
+    filter_thickness = 0.5
+    light_filter = Part.makeBox(width,depth, filter_thickness,Base.Vector(0,0,-filter_thickness))
+    combined_box = boxes.fuse(light_filter)
+    combined_box.translate(Base.Vector(0,200,0))
+    Part.show(combined_box)
+    surrround_thickness = 5.0
+    surround_base_thickness = 2.0
+    box_side_height = 30.0
+    box_base_offset = 15.0
+    box_gap = 0.4
+    inner_support_size = 1.0
+#
+# Now make the inner back
+#
+    innerBackThickness = 1.0
+    lightBaffle = Part.makeBox(width,depth, innerBackThickness) 
+#
+# Cut the slots for the neopixels
+#
+    no_of_lines = text.count("\n") + 1
+    line_spacing = float(depth)/no_of_lines
+    slot_depth = 11
+    slot_width = 4
+    slot_indent = 5
+    for line in range(no_of_lines):  
+        slot_y = ((line_spacing/2.0) - (slot_depth/2.0)) + (line*line_spacing) 
+        cableSlot = Part.makeBox( slot_width, slot_depth, innerBackThickness, Base.Vector(slot_indent, slot_y,0))
+        lightBaffle = lightBaffle.cut(cableSlot)
+        cableSlot = Part.makeBox( slot_width, slot_depth, innerBackThickness, Base.Vector(width - slot_indent - slot_width, slot_y,0))
+        lightBaffle = lightBaffle.cut(cableSlot)
+    
+    lightBaffle.translate(Base.Vector(0,100,0))
+    Part.show(lightBaffle)
+
+#
+# Now make the wall plinth
+#
+
+    outerWidth = width + (2*surrround_thickness) + (2*box_gap)
+    outerDepth = depth + (2*surrround_thickness) + (2*box_gap)
+    wallMountSlotInset = 20.0
+#
+#
+    wallPlinth = Part.makeBox(outerWidth,outerDepth, box_side_height)
+    cutWidth = width + (2*box_gap)
+    cutDepth = depth + (2*box_gap)
+    cutHeight = box_side_height-surround_base_thickness-box_base_offset
+    wallPlinthCut = Part.makeBox(cutWidth,cutDepth, cutHeight, Base.Vector(surrround_thickness,surrround_thickness,surround_base_thickness+box_base_offset))
+    wallPlinth = wallPlinth.cut(wallPlinthCut)
+    cutWidth = cutWidth - (2*inner_support_size)
+    cutDepth = cutDepth- (2*inner_support_size)
+    cutHeight = box_base_offset
+    wallPlinthCut = Part.makeBox(cutWidth,cutDepth, cutHeight, Base.Vector(surrround_thickness+inner_support_size,surrround_thickness+inner_support_size,surround_base_thickness))
+    wallPlinth = wallPlinth.cut(wallPlinthCut)
+    holeHeight=14.0
+    holePos = Base.Vector(0,(outerDepth-holeHeight)/2.0,0)
+    hole = Part.makeBox(6,holeHeight,10,holePos)
+    wallPlinth = wallPlinth.cut(hole)
+# 
+# Add the pillars for the ESP8266
+#
+    baseDepth=surround_base_thickness
+    pillarInset=40
+    bottomLeftHoleX = pillarInset + surrround_thickness
+    pillarSpacing=15
+    bottomLeftHoleY = ((outerDepth-pillarSpacing)/2)
+    wallPlinth=addPillar(wallPlinth,bottomLeftHoleX,bottomLeftHoleY,baseDepth)
+    bottomLeftHoleY = bottomLeftHoleY+pillarSpacing
+    wallPlinth=addPillar(wallPlinth,bottomLeftHoleX,bottomLeftHoleY,baseDepth)
+    pillarInset=35
+    bottomLeftHoleX = pillarInset + surrround_thickness
+    pillarSpacing=15
+    bottomLeftHoleY = ((outerDepth-pillarSpacing)/2)
+    wallPlinth=addPost(wallPlinth,bottomLeftHoleX,bottomLeftHoleY,baseDepth,postHeight=2.5)
+    bottomLeftHoleY = bottomLeftHoleY+pillarSpacing
+    wallPlinth=addPost(wallPlinth,bottomLeftHoleX,bottomLeftHoleY,baseDepth,postHeight=2.5)
+#
+# now cut the wall mount holes
+#
+    wallMountHoleIndent =60.0
+    wallMountLargeHoleRadius = 5.0
+    wallMountSlotWidth = 4.0
+    wallMountSlotDepth = 6.0
+    if outerWidth<((wallMountHoleIndent*2)+30):
+        holePositions = [outerWidth/2.0]
+    else:
+        holePositions = [wallMountHoleIndent,outerWidth-wallMountHoleIndent]
+    for x in holePositions:
+        hole = Part.makeCylinder(wallMountLargeHoleRadius, surround_base_thickness, Base.Vector(x, outerDepth-wallMountSlotInset, 0), Base.Vector(0,0,1))
+        wallPlinth = wallPlinth.cut(hole)
+        slotX = x-(wallMountSlotWidth/2.0)
+        slotY = outerDepth-wallMountSlotInset + wallMountSlotDepth/2.0
+        slot = Part.makeBox(wallMountSlotWidth, wallMountSlotDepth, surround_base_thickness, Base.Vector(slotX, slotY, 0))
+        wallPlinth = wallPlinth.cut(slot)
+        
+#
+    wallPlinth.translate(Base.Vector(0,150,0))
+    Part.show(wallPlinth)
+    return 
+
+makeLightBox(text, filePrefix)
+Gui.SendMsgToActiveView("ViewFit")
+Gui.activeDocument().activeView().viewAxometric()
